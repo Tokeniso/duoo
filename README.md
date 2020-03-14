@@ -5,7 +5,8 @@ package main
 
 import (
 	"fmt"
-	"rate/rate"
+	
+	"github.com/Tokeniso/duoo"
 )
 
 func main() {
