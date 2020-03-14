@@ -1,4 +1,4 @@
-package rate
+package duoo
 
 import (
 	"context"
