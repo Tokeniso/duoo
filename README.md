@@ -13,7 +13,7 @@ func main() {
 	var number int32 = 500 // 每second许可数量
 	var second int32 = 3   // 秒
 
-	boolRate := rate.NewRate(number, second)
+	boolRate := duoo.NewRate(number, second)
 	boolRate.SetDebug()
 
 	for i:=0;i<2000;i++ {
