@@ -35,17 +35,15 @@ func main() {
 ```
 启动中....
 启动完成.
+refresh channel, tag: 0
 refresh channel, tag: 1
 refresh channel, tag: 2
 refresh channel, tag: 3
-refresh channel, tag: 4
-refresh channel, tag: 5
-循环批次：3 -- wait：501 -- retry：1 -- done：500
-循环批次：4 -- wait：501 -- retry：1 -- done：500
-循环批次：5 -- wait：1 -- retry：0 -- done：1
-循环批次：1 -- wait：500 -- retry：1 -- done：499
+循环批次：0 -- wait：501 -- retry：1 -- done：500
+循环批次：1 -- wait：501 -- retry：1 -- done：500
 循环批次：2 -- wait：501 -- retry：1 -- done：500
+循环批次：3 -- wait：500 -- retry：0 -- done：500
 
-Process finished with exit code 0
+Process finished with exit code 2
 
 ```
