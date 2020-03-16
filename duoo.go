@@ -9,43 +9,56 @@ import (
 	"time"
 )
 
+const (
+	runningStatus = iota // 运行
+	stopStatus    = iota // 停止
+)
+
 // 存储时间周期对应的channel    map[时间周期Tag]当前时间周期channel
 type rateChan map[int32]chan bool
 
 // debug计数
-type debugCount map[int32]*statistics
+type debugCount map[int32]*Statistics
 
 // debug计数的内容
 // Retry的数量与并发数量有关，一般小于等于并发数
 // 如：
 // N个并发获取许可，时间周期内许可被耗尽，N个并发等待，
 // 下个周期开始时，清除上个周期channel，导致N个并发的等待失败，Retry
-type statistics struct {
-	Wait  int32    // 等待获取许可数量
-	Done  int32    // 许可派发数量
-	Retry int32    // 重新获取许可数量
+type Statistics struct {
+	Wait  int32 // 等待获取许可数量
+	Done  int32 // 许可派发数量
+	Retry int32 // 重新获取许可数量
+}
+
+// 终止速率分配
+type stopAction struct {
+	status int32     // 服务状态 runningStatus 运行 stopStatus 被停止
+	ch     chan bool // 停止定时器
+	cancel func()    // 停止许可分配ctx
 }
 
 // ·布尔型速率控制·结构体
 // 可修改ch的类型来传递更多实际的```许可令牌```
 // 每 bc.second 秒最多派发 bc.rate 个许可，超过时间周期会被清空
 type BoolControl struct {
-	rate 		int32 			// 时间周期内许可的数量
-	second  	int32 			// 许可的时间周期
-	ch 	    	rateChan 		// 许可channel(布尔类型)
-	isNew  		bool 			// 新建channel的派发状态， true未派发，false已派发
-	start 		time.Time 		// 速率控制启动时间
-	fail 		int      		// 失败重试次数
-	mu 			sync.Mutex 		// channel读写锁
-	chanMu 		sync.Mutex		// 许可派发同步锁
-	deMu 		sync.Mutex 		// debug计数器锁
-	Count   	debugCount 		// debug计数结构体
-	debug   	bool 			// 是否开启debug
-	timeCycle 	time.Duration   // 时间周期对应的 time.Duration
+	rate      int32         // 时间周期内许可的数量
+	second    int32         // 许可的时间周期
+	ch        rateChan      // 许可channel(布尔类型)
+	isNew     bool          // 新建channel的派发状态， true未派发，false已派发
+	start     time.Time     // 速率控制启动时间
+	fail      int           // 失败重试次数
+	mu        sync.Mutex    // channel读写锁
+	chanMu    sync.Mutex    // 许可派发同步锁
+	deMu      sync.Mutex    // debug计数器锁
+	Count     debugCount    // debug计数结构体
+	debug     bool          // 是否开启debug
+	timeCycle time.Duration // 时间周期对应的 time.Duration
+	down      stopAction    // 停止通知
 }
 
 // 初始化一个·布尔型速率控制·
-func NewRate(rate int32, second int32) *BoolControl {
+func newRate(rate int32, second int32) *BoolControl {
 	bc := &BoolControl{}
 	bc.rate = rate
 	bc.second = second
@@ -59,12 +72,25 @@ func NewRate(rate int32, second int32) *BoolControl {
 	bc.Count = debugCount{}
 	bc.debug = false
 	bc.timeCycle = time.Duration(bc.second) * time.Second
-	atomic.AddInt32(&bc.rate, 1)
+	bc.down = stopAction{runningStatus, make(chan bool), func() {}}
+	return bc
+}
+
+// 启动一个·布尔型速率控制·
+func RateStart(rate int32, second int32) *BoolControl {
+	bc := newRate(rate, second)
+	bc.beginTicker()
+
+	return bc
+}
+
+// 启动一个带debug的·布尔型速率控制·
+func RateStartWithDebug(rate int32, second int32) *BoolControl {
 	fmt.Println("启动中....")
-	bc.Start()
-	_, _ = bc.GetPermission()
+	bc := newRate(rate, second)
+	bc.SetDebug()
+	bc.beginTicker()
 	fmt.Println("启动完成.")
-	atomic.AddInt32(&bc.rate, -1)
 	return bc
 }
 
@@ -85,6 +111,9 @@ func (bc *BoolControl) GetPermission() (bool, error) {
 
 // 获取一个许可
 func (bc *BoolControl) Permission(fail int) (bool, error) {
+	if bc.down.status == stopStatus {
+		return false, errors.New("service stopped")
+	}
 	if bc.fail < fail {
 		return false, errors.New("over the maximum of failed")
 	}
@@ -108,15 +137,22 @@ func (bc *BoolControl) Permission(fail int) (bool, error) {
 
 // 准备创建channel
 func (bc *BoolControl) prepareMakeChan() {
-	ctx, _ := context.WithTimeout(context.Background(), bc.timeCycle)
+	ctx, call := context.WithTimeout(context.Background(), bc.timeCycle)
+	bc.down.cancel = call
 	bc.makeChan(ctx)
 }
 
 // 给未派发的channel派发许可
 func (bc *BoolControl) makeChan(ctx context.Context) {
-	ch, _, ok := bc.getChanByCreate()
+	ch, tag, ok := bc.getChanByCreate()
 	if !ok {
 		return
+	}
+	if bc.down.status == stopStatus {
+		return
+	}
+	if bc.debug {
+		fmt.Println("refresh channel, tag:", tag)
 	}
 	var i int32
 	for i = 0; i < bc.rate; i ++ {
@@ -147,9 +183,9 @@ func (bc *BoolControl) chanFactory(create bool) (chan bool, int32, bool) {
 	defer func() {
 		bc.mu.Unlock()
 	}()
-	tag := bc.getTag()
+	tag := bc.GetTag()
 	ch, ok := bc.ch[tag]
-	if !ok { // channel不存在
+	if !ok { // channel不存在，清理旧channel
 		bc.clearChan()
 		ch = bc.recoverChan()
 		bc.ch[tag] = ch
@@ -168,12 +204,15 @@ func (bc *BoolControl) queuePermission(ch chan bool) (bool, bool) {
 	defer func() {
 		bc.chanMu.Unlock()
 	}()
+	if bc.down.status == stopStatus {
+		return false, false
+	}
 	data, col := <-ch
 	return data, col
 }
 
 // 获取当前时间周期内的Tag
-func (bc *BoolControl) getTag() int32 {
+func (bc *BoolControl) GetTag() int32 {
 	ti := time.Now().Sub(bc.start).Seconds()
 	tag := int32(int32(ti) / bc.second)
 	return tag
@@ -194,15 +233,35 @@ func (bc *BoolControl) clearChan() {
 }
 
 // 启动派发channel许可的计时器
-func (bc *BoolControl) Start() {
+func (bc *BoolControl) beginTicker() {
 	go func() {
+		// 启动就开始分配
+		bc.prepareMakeChan()
 		ticker := time.NewTicker(bc.timeCycle)
 		for {
-			<-ticker.C
-			fmt.Println("refresh channel")
-			bc.prepareMakeChan()
+			select {
+			case <-ticker.C:
+				bc.prepareMakeChan()
+			case <-bc.down.ch:
+				ticker.Stop()
+				time.AfterFunc(bc.timeCycle, func() { // 为了chanFactory 中的清理工作
+					bc.prepareMakeChan()
+				})
+				return
+			}
 		}
 	}()
+}
+
+// 停止许可派发，并从下一个时间周期开始终止速率分配
+// 注：没有在一个时间周期中就终止速率分配是因为并发下会出现不可预期的死锁问题
+func (bc *BoolControl) Stop() {
+	if atomic.AddInt32(&bc.down.status, 1) == stopStatus {
+		bc.down.ch <- true // 通知定时器停止
+		bc.down.cancel()   // 关闭许可分配ctx
+	} else {
+		atomic.AddInt32(&bc.down.status, -1)
+	}
 }
 
 // debug 累加 当前时间周期中 获取许可等待数量
@@ -210,7 +269,7 @@ func (bc *BoolControl) addWait(tag int32) {
 	bc.deMu.Lock()
 	_, ok := bc.Count[tag]
 	if !ok {
-		bc.Count[tag] = &statistics{}
+		bc.Count[tag] = &Statistics{}
 	}
 	atomic.AddInt32(&(bc.Count[tag].Wait), 1)
 	bc.deMu.Unlock()

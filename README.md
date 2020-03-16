@@ -13,8 +13,7 @@ func main() {
 	var number int32 = 500 // 每second许可数量
 	var second int32 = 3   // 秒
 
-	boolRate := duoo.NewRate(number, second)
-	boolRate.SetDebug()
+	boolRate := duoo.RateStartWithDebug(number, second)
 
 	for i:=0;i<2000;i++ {
 		_, err := boolRate.GetPermission()
@@ -35,12 +34,12 @@ func main() {
 
 ```
 启动中....
-refresh channel
 启动完成.
-refresh channel
-refresh channel
-refresh channel
-refresh channel
+refresh channel, tag: 1
+refresh channel, tag: 2
+refresh channel, tag: 3
+refresh channel, tag: 4
+refresh channel, tag: 5
 循环批次：3 -- wait：501 -- retry：1 -- done：500
 循环批次：4 -- wait：501 -- retry：1 -- done：500
 循环批次：5 -- wait：1 -- retry：0 -- done：1
