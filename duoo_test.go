@@ -8,7 +8,7 @@ import (
 
 // 速率许可分配测试
 func TestNewRateWithDebug(t *testing.T) {
-	bc := RateStartWithDebug(300000, 1)
+	bc := RateStartWithDebug(500000, 1)
 
 	wg := sync.WaitGroup{}
 	for i := 0; i < 30000; i++ {

@@ -49,7 +49,6 @@ type BoolControl struct {
 	start     time.Time     // 速率控制启动时间
 	fail      int           // 失败重试次数
 	mu        sync.Mutex    // channel读写锁
-	chanMu    sync.Mutex    // 许可派发同步锁
 	deMu      sync.Mutex    // debug计数器锁
 	Count     debugCount    // debug计数结构体
 	debug     bool          // 是否开启debug
@@ -67,7 +66,6 @@ func newRate(rate int32, second int32) *BoolControl {
 	bc.start = time.Now()
 	bc.fail = 5
 	bc.mu = sync.Mutex{}
-	bc.chanMu = sync.Mutex{}
 	bc.deMu = sync.Mutex{}
 	bc.Count = debugCount{}
 	bc.debug = false
@@ -200,10 +198,6 @@ func (bc *BoolControl) chanFactory(create bool) (chan bool, int32, bool) {
 
 // 许可派发
 func (bc *BoolControl) queuePermission(ch chan bool) (bool, bool) {
-	bc.chanMu.Lock()
-	defer func() {
-		bc.chanMu.Unlock()
-	}()
 	if bc.down.status == stopStatus {
 		return false, false
 	}
