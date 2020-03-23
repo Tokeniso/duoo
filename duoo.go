@@ -97,6 +97,11 @@ func (bc *BoolControl) SetDebug() {
 	bc.debug = true
 }
 
+// 设置最大失败次数
+func (bc *BoolControl) SetFail(number int) {
+	bc.fail = number
+}
+
 // 新建一个channel
 func (bc *BoolControl) recoverChan() chan bool {
 	return make(chan bool, bc.rate)
@@ -112,7 +117,8 @@ func (bc *BoolControl) Permission(fail int) (bool, error) {
 	if bc.down.status == stopStatus {
 		return false, errors.New("service stopped")
 	}
-	if bc.fail < fail {
+	// 竞争失败下不做处理
+	if bc.fail > 0 && bc.fail < fail {
 		return false, errors.New("over the maximum of failed")
 	}
 	ch, tag, _ := bc.getChanByStore()
