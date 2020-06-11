@@ -1,5 +1,3 @@
-module duoo
+module github.com/Tokeniso/duoo
 
-go 1.12
-
-require github.com/Tokeniso/duoo v2.0.0
+go 1.13
